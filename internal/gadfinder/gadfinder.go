@@ -205,22 +205,33 @@ func (gf *GadFinder) scanFile(filename, base string, opt FindOpts) ([]*gadget.Ga
 		}
 	}
 
-	var out []*gadget.Gadget
+	// Gather matches, serially or (x86 Galileo only) across worker goroutines.
+	var matches []search.Match
+	parallelizable := a.Parallelizable() && !gf.has(Ropblock)
+	if gf.Jobs > 1 && parallelizable {
+		matches = gf.parallelScan(bin, a, depth, terms, isValid, acceptCandidate)
+	} else {
+		if gf.Jobs > 1 {
+			debuglog.Info("%s scan runs single-threaded; --jobs ignored", a.ScanName(gf.has(Ropblock), gf.framed()))
+		}
+		for _, sec := range bin.ExecSections() {
+			matches = append(matches, a.Scan(sec.Opcodes, sec.Vaddr, depth, dis, isValid, terms,
+				acceptCandidate, gf.framed(), gf.has(Ropblock), nil)...)
+		}
+	}
+
+	out := make([]*gadget.Gadget, 0, len(matches))
 	var records []cache.Record
-	for _, sec := range bin.ExecSections() {
-		matches := a.Scan(sec.Opcodes, sec.Vaddr, depth, dis, isValid, terms,
-			acceptCandidate, gf.framed(), gf.has(Ropblock), nil)
-		for _, m := range matches {
-			sym := ""
-			if symTab != nil {
-				sym = symTab.nearest(m.Vaddr)
-			}
-			g := gadget.New(filename, a, m.Vaddr, m.Decodes, m.Raw, m.Frame)
-			g.Symbol = sym
-			out = append(out, g)
-			if gf.cache != nil {
-				records = append(records, cache.Record{Vaddr: m.Vaddr, Hex: hex.EncodeToString(m.Raw), Frame: m.Frame})
-			}
+	for _, m := range matches {
+		sym := ""
+		if symTab != nil {
+			sym = symTab.nearest(m.Vaddr)
+		}
+		g := gadget.New(filename, a, m.Vaddr, m.Decodes, m.Raw, m.Frame)
+		g.Symbol = sym
+		out = append(out, g)
+		if gf.cache != nil {
+			records = append(records, cache.Record{Vaddr: m.Vaddr, Hex: hex.EncodeToString(m.Raw), Frame: m.Frame})
 		}
 	}
 	if gf.cache != nil && key != "" {

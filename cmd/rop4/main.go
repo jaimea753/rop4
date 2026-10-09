@@ -30,6 +30,7 @@ type args struct {
 	symbols      bool
 	all          bool
 	depth        int
+	jobs         int
 	rop          bool
 	jop          bool
 	retf         bool
@@ -79,7 +80,7 @@ func main() {
 		debuglog.SetVerbose(true)
 		a.printVerboseSummary(flags)
 	}
-	gf := gadfinder.New(a.depth, flags, 1)
+	gf := gadfinder.New(a.depth, flags, a.jobs)
 	if a.cache {
 		gf.SetCache(a.cacheDir)
 	}
@@ -283,7 +284,7 @@ func (a *args) toFlags() int {
 
 // parse is a minimal hand-rolled parser for rop3's flag set (no external deps).
 func parse(argv []string) (*args, error) {
-	a := &args{rop: true, frame: true, depth: 0, outputFmt: "text"}
+	a := &args{rop: true, frame: true, depth: 0, jobs: 1, outputFmt: "text"}
 	i := 0
 	// collectList consumes following tokens until the next option.
 	collectList := func() []string {
@@ -371,6 +372,16 @@ func parse(argv []string) (*args, error) {
 			a.keepContra = true
 		case "--keep-canary-address":
 			a.keepCanary = true
+		case "--jobs":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("--jobs must be a positive integer")
+			}
+			a.jobs = n
 		case "--interactive":
 			a.interactive = true
 		case "--cache":

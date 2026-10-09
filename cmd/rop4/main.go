@@ -16,6 +16,7 @@ import (
 	"github.com/reverseame/rop4/internal/debuglog"
 	"github.com/reverseame/rop4/internal/gadfinder"
 	"github.com/reverseame/rop4/internal/output"
+	"github.com/reverseame/rop4/internal/repl"
 	"github.com/reverseame/rop4/internal/ropchain"
 )
 
@@ -42,6 +43,7 @@ type args struct {
 	keepCanary   bool
 	outputFmt    string
 	tuple        bool
+	interactive  bool
 	cache        bool
 	cacheDir     string
 	verbose      bool
@@ -88,6 +90,11 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: error: %s\n", toolName(), err)
 		os.Exit(1)
+	}
+
+	if a.interactive {
+		repl.New(gf, gadgets, a.binary, os.Stdin, os.Stdout).Run()
+		return
 	}
 
 	outFmt := a.outputFmt
@@ -364,6 +371,8 @@ func parse(argv []string) (*args, error) {
 			a.keepContra = true
 		case "--keep-canary-address":
 			a.keepCanary = true
+		case "--interactive":
+			a.interactive = true
 		case "--cache":
 			a.cache = true
 		case "--cache-dir":

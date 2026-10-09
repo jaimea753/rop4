@@ -74,7 +74,7 @@ func free(name string) gadfinder.ChainStep {
 // search runs the default engine, returning all solutions (limit 0).
 func search(t *testing.T, gf *gadfinder.GadFinder, gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, prune bool) ([][]*gadget.Gadget, error) {
 	t.Helper()
-	return ropchain.New(gf).Search(gadgets, steps, prune, false, 0)
+	return ropchain.New(gf).Search(gadgets, steps, prune, false, 0, nil)
 }
 
 func reprs(chain []*gadget.Gadget) []string {
@@ -603,14 +603,21 @@ func TestParseFreeLineMalformedRaises(t *testing.T) {
 	}
 }
 
-func TestParseRawStepRejected(t *testing.T) {
-	// deferred: raw(...) ROP-chain steps are not implemented; the parser must
-	// reject them cleanly rather than mis-parse.
+func TestParseRawStepAccepted(t *testing.T) {
+	// raw(...) ROP-chain steps are implemented: ParseFile must parse a raw line
+	// into a step carrying an inline OperationDef (no catalog lookup).
 	path := filepath.Join(t.TempDir(), "c.txt")
 	if err := os.WriteFile(path, []byte("raw([pop, ret], [rdi], [rdi], [])\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ropchain.ParseFile(path); err == nil {
-		t.Fatal("expected raw(...) to be rejected")
+	steps, err := ropchain.ParseFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error parsing raw step: %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("want 1 step, got %d", len(steps))
+	}
+	if steps[0].Defn == nil {
+		t.Fatal("raw step must carry an inline OperationDef (Defn)")
 	}
 }

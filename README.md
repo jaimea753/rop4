@@ -61,6 +61,32 @@ faster tool: the legacy `--dst`/`--src` operand flags, and `--legacy-ropchain` w
 whole-chain "Tree" engine (rop4 keeps only the order-aware chain engine). Gadget,
 operation and ROP-chain results are otherwise identical to rop3.
 
+## Python API
+
+rop4 can be driven from Python. Build it as a C shared library and use the thin
+`python/rop4.py` wrapper, whose `Rop4` class mirrors rop3's `Rop3`:
+
+```sh
+nix-shell ./shell.nix --run 'go build -buildmode=c-shared -o python/librop4.so ./pybind'
+```
+
+```python
+import sys; sys.path.insert(0, "python")
+from rop4 import Rop4            # Rop3 is an alias
+
+r = Rop4("libc.so.6", symbols=True)
+for g in r.gadgets():            # list of dicts (same shape as --output json)
+    print(g["vaddr"], g["gadget"])
+
+r.find_op("mov", ["rdi", "rax"]) # gadget dicts, or (compound op) a list of chains
+r.ropchain("chain.txt")          # list of chains, each a list of gadget dicts
+r.describe()                     # per-binary metadata
+```
+
+The wrapper loads `python/librop4.so` (override with the `ROP4_LIB` environment
+variable). The library links libcapstone; on NixOS its path is baked into the
+shared object's RPATH, so it loads without a nix-shell.
+
 ## Tests
 
 ```sh

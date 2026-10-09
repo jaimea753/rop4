@@ -1,3 +1,5 @@
 /rop4
 *.test
 /.claude/
+python/librop4.so
+python/librop4.h

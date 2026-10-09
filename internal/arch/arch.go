@@ -125,7 +125,12 @@ func (b *base) BaseMnemonic(mnemonic string) string {
 func (b *base) hasRetImm(decodes []*Insn, terminations []string) bool { return false }
 
 func (b *base) terminatesROP(insn *Insn, terminations []string) bool {
-	return contains(terminations, b.outer.BaseMnemonic(insn.Mnemonic))
+	// rop3 checks the RAW mnemonic here (Architecture._terminates_rop uses
+	// insn.mnemonic, not base_mnemonic), so a prefixed terminator like x86
+	// `bnd ret` (mnemonic "bnd ret") is NOT a valid ROP terminator. (The JOP
+	// terminator check and the intermediate-instruction checks do strip
+	// prefixes; this one deliberately does not.)
+	return contains(terminations, insn.Mnemonic)
 }
 
 func (b *base) IsValidJOPLast(insn *Insn) bool { return true }

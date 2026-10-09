@@ -8,62 +8,179 @@ on:
 permissions:
   contents: write
 
+env:
+  # Capstone is built from source for every target so each artifact embeds a
+  # v5 (RISC-V-capable) libcapstone, regardless of what the OS packages.
+  CAPSTONE_VERSION: "5.0.3"
+
 jobs:
-  build-release:
+  # ---------------------------------------------------------------------------
+  # Linux (glibc + musl) and Windows, both arches, cross-compiled from one Linux
+  # runner. zig cc is the C compiler/linker for cgo and also builds capstone, so
+  # no per-arch runners or distro packages are involved.
+  # ---------------------------------------------------------------------------
+  cross:
     runs-on: ubuntu-latest
-    # Same reason as the CI job: trixie is the first Debian with libcapstone v5
-    # (RISC-V capable), which the CGo wrapper needs to compile.
-    container: debian:trixie
-    env:
-      CGO_ENABLED: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-amd64-glibc, goos: linux,   goarch: amd64, zig: x86_64-linux-gnu.2.28,   sysname: Linux,   lib: so,    static: false }
+          - { name: linux-arm64-glibc, goos: linux,   goarch: arm64, zig: aarch64-linux-gnu.2.28,  sysname: Linux,   lib: so,    static: false }
+          - { name: linux-amd64-musl,  goos: linux,   goarch: amd64, zig: x86_64-linux-musl,       sysname: Linux,   lib: so,    static: true  }
+          - { name: linux-arm64-musl,  goos: linux,   goarch: arm64, zig: aarch64-linux-musl,      sysname: Linux,   lib: so,    static: true  }
+          - { name: windows-amd64,     goos: windows, goarch: amd64, zig: x86_64-windows-gnu,      sysname: Windows, lib: dll,   static: true  }
+          - { name: windows-arm64,     goos: windows, goarch: arm64, zig: aarch64-windows-gnu,     sysname: Windows, lib: dll,   static: true  }
     steps:
-      - name: Install capstone + toolchain
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            libcapstone-dev pkg-config build-essential git ca-certificates file
-
       - uses: actions/checkout@v4
-
-      # See ci.yml: run: steps use HOME=/root, so re-trust the workspace here or
-      # git-based VCS stamping aborts with "exit status 128".
-      - name: Trust the workspace for git
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build rop4 (fully static)
-        run: |
-          # -linkmode external hands the final link to gcc; -extldflags "-static"
-          # makes gcc link libcapstone.a (from libcapstone-dev) and glibc into
-          # the binary, so the release artifact needs no libcapstone on the
-          # target. -lm covers capstone's libm references under static linking,
-          # which pkg-config (invoked without --static by cgo) does not emit.
-          go build -trimpath \
-            -ldflags "-s -w -linkmode external -extldflags '-static -lm'" \
-            -o rop4 ./cmd/rop4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.13.0"
 
-      - name: Verify the binary is static
+      - name: Build static libcapstone for ${{ matrix.name }}
         run: |
-          file rop4 || true
-          if ldd rop4 2>&1 | grep -q "not a dynamic executable"; then
-            echo "OK: rop4 is statically linked"
-          else
-            echo "ERROR: rop4 is dynamically linked; aborting release" >&2
-            ldd rop4 || true
-            exit 1
+          set -eux
+          git clone --depth 1 -b "${CAPSTONE_VERSION}" \
+            https://github.com/capstone-engine/capstone.git capstone-src
+
+          # CMake wants single-binary compiler paths, so wrap the zig cross tools.
+          mkdir -p wrap
+          printf '#!/bin/sh\nexec zig cc -target %s "$@"\n'  "${{ matrix.zig }}" > wrap/cc
+          printf '#!/bin/sh\nexec zig c++ -target %s "$@"\n' "${{ matrix.zig }}" > wrap/cxx
+          printf '#!/bin/sh\nexec zig ar "$@"\n'             > wrap/ar
+          printf '#!/bin/sh\nexec zig ranlib "$@"\n'         > wrap/ranlib
+          chmod +x wrap/*
+
+          cmake -S capstone-src -B capstone-src/build \
+            -DCMAKE_SYSTEM_NAME="${{ matrix.sysname }}" \
+            -DCMAKE_C_COMPILER="$PWD/wrap/cc" \
+            -DCMAKE_CXX_COMPILER="$PWD/wrap/cxx" \
+            -DCMAKE_AR="$PWD/wrap/ar" \
+            -DCMAKE_RANLIB="$PWD/wrap/ranlib" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCAPSTONE_BUILD_SHARED_LIBS=OFF \
+            -DCAPSTONE_BUILD_STATIC=ON \
+            -DCAPSTONE_BUILD_CSTOOL=OFF \
+            -DCAPSTONE_BUILD_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/capstone-prefix"
+          cmake --build capstone-src/build --target install -j"$(nproc)"
+
+      - name: Build rop4 CLI and Python wrapper
+        run: |
+          set -eux
+          export CGO_ENABLED=1
+          export GOOS="${{ matrix.goos }}"
+          export GOARCH="${{ matrix.goarch }}"
+          export CC="$PWD/wrap/cc"
+          export CXX="$PWD/wrap/cxx"
+          # The cgo preamble uses `#cgo pkg-config: capstone`; point pkg-config at
+          # the freshly cross-built capstone and nowhere else.
+          export PKG_CONFIG_PATH="$PWD/capstone-prefix/lib/pkgconfig:$PWD/capstone-prefix/lib64/pkgconfig"
+
+          bin="rop4-${{ matrix.name }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then bin="${bin}.exe"; fi
+
+          ldflags="-s -w"
+          if [ "${{ matrix.static }}" = "true" ]; then
+            ldflags="$ldflags -linkmode external -extldflags '-static'"
           fi
 
-      - name: Package tarball
-        run: |
-          tar -czf "rop4-${GITHUB_REF_NAME}-linux-amd64.tar.gz" \
-            rop4 README.md LICENSE AUTHORS
+          # CLI: capstone is static-only in the prefix, so it is always embedded;
+          # the musl/windows targets additionally link libc statically.
+          go build -trimpath -ldflags "$ldflags" -o "$bin" ./cmd/rop4
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+          # Python wrapper: a shared object either way, with capstone embedded.
+          go build -trimpath -buildmode=c-shared \
+            -o "librop4-${{ matrix.name }}.${{ matrix.lib }}" ./pybind
+
+          file "$bin" || true
+
+      - uses: actions/upload-artifact@v4
         with:
-          files: rop4-*-linux-amd64.tar.gz
+          name: ${{ matrix.name }}
+          path: |
+            rop4-${{ matrix.name }}*
+            librop4-${{ matrix.name }}.${{ matrix.lib }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # macOS built natively: Apple does not support statically linking libSystem,
+  # so only capstone is embedded (the system libc stays dynamic, as on every
+  # mac binary). amd64 uses the Intel runner, arm64 the Apple-silicon runner.
+  # ---------------------------------------------------------------------------
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-amd64, runner: macos-13 }
+          - { name: macos-arm64, runner: macos-14 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install capstone
+        run: brew install capstone pkgconf
+
+      - name: Build rop4 CLI and Python wrapper
+        run: |
+          set -eux
+          export CGO_ENABLED=1
+          cap="$(brew --prefix capstone)"
+          export PKG_CONFIG_PATH="$cap/lib/pkgconfig"
+          # Force the capstone static archive: with the dylib present the linker
+          # would prefer it and the artifact would need Homebrew capstone at
+          # runtime. Hiding the dylibs makes -lcapstone resolve to libcapstone.a.
+          mkdir -p "$RUNNER_TEMP/caphide"
+          mv "$cap"/lib/libcapstone*.dylib "$RUNNER_TEMP/caphide/" || true
+
+          go build -trimpath -ldflags "-s -w" \
+            -o "rop4-${{ matrix.name }}" ./cmd/rop4
+          go build -trimpath -buildmode=c-shared \
+            -o "librop4-${{ matrix.name }}.dylib" ./pybind
+
+          otool -L "rop4-${{ matrix.name }}" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            rop4-${{ matrix.name }}
+            librop4-${{ matrix.name }}.dylib
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Gather every produced artifact and publish them as individual release
+  # assets (no archives). Runs even if some targets failed, so a release still
+  # ships whatever built.
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [cross, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
           generate_release_notes: true
+          fail_on_unmatched_files: true

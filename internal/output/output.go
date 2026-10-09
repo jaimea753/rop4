@@ -209,3 +209,44 @@ func Ropchains(w io.Writer, chains [][]*gadget.Gadget, format string, exhaustive
 	}
 	return nil
 }
+
+// BinaryInfoLines renders a Describe() map as human-readable lines
+// (rop3 utils.binary_info_lines).
+func BinaryInfoLines(info map[string]any) []string {
+	format, _ := info["format"].(string)
+	if format == "" {
+		format = "unknown"
+	}
+	filename, _ := info["filename"].(string)
+	head := fmt.Sprintf("%s: %s, %v, %v-bit", baseName(filename), format, info["arch"], info["bits"])
+	if e, ok := info["endianness"].(string); ok && e != "" {
+		head += fmt.Sprintf(", %s-endian", e)
+	}
+	lines := []string{head}
+
+	detail := fmt.Sprintf("instruction alignment: %v byte(s)", info["alignment"])
+	if alg, ok := info["algorithm"].(string); ok && alg != "" {
+		detail += fmt.Sprintf(", %s scan", alg)
+	}
+	if entry, ok := info["entry"]; ok {
+		detail = fmt.Sprintf("entry: %#x, image base: %#x, ", entry, info["image_base"]) + detail
+	}
+	lines = append(lines, detail)
+
+	secs, _ := info["sections"].([]map[string]any)
+	total := 0
+	for _, s := range secs {
+		if sz, ok := s["size"].(int); ok {
+			total += sz
+		}
+	}
+	lines = append(lines, fmt.Sprintf("%d executable section(s), %d bytes total", len(secs), total))
+	for _, s := range secs {
+		name, _ := s["name"].(string)
+		if name == "" {
+			name = "section"
+		}
+		lines = append(lines, fmt.Sprintf("  %s @ %#x (%v bytes)", name, s["vaddr"], s["size"]))
+	}
+	return lines
+}

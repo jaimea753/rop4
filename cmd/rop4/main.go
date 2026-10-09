@@ -12,6 +12,8 @@ import (
 
 	"errors"
 
+	"github.com/reverseame/rop4/internal/binfmt"
+	"github.com/reverseame/rop4/internal/debuglog"
 	"github.com/reverseame/rop4/internal/gadfinder"
 	"github.com/reverseame/rop4/internal/output"
 	"github.com/reverseame/rop4/internal/ropchain"
@@ -40,6 +42,7 @@ type args struct {
 	keepCanary   bool
 	outputFmt    string
 	tuple        bool
+	verbose      bool
 	version      bool
 	op           string
 	operands     []string
@@ -68,6 +71,10 @@ func main() {
 	}
 
 	flags := a.toFlags()
+	if a.verbose {
+		debuglog.SetVerbose(true)
+		a.printVerboseSummary(flags)
+	}
 	gf := gadfinder.New(a.depth, flags, 1)
 	gadgets, err := gf.Find(a.binary, gadfinder.FindOpts{
 		Bases: a.base, Badchars: a.badchar, BadcharBytes: a.badcharBytes,
@@ -161,6 +168,65 @@ func joinComma(xs []string) string {
 }
 
 func toolName() string { return "rop4" }
+
+// printVerboseSummary prints the search configuration and a per-binary metadata
+// summary (rop3 __init__ verbose block). Best-effort: a binary that fails to
+// load is skipped here (the scan reports the real error).
+func (a *args) printVerboseSummary(flags int) {
+	var kinds []string
+	if flags&gadfinder.ROP != 0 {
+		kinds = append(kinds, "ROP")
+	}
+	if flags&gadfinder.JOP != 0 {
+		kinds = append(kinds, "JOP")
+	}
+	if flags&gadfinder.RETF != 0 {
+		kinds = append(kinds, "RETF")
+	}
+	kindStr := "none"
+	if len(kinds) > 0 {
+		kindStr = joinPlus(kinds)
+	}
+	depthStr := "auto"
+	if a.depth > 0 {
+		depthStr = fmt.Sprintf("%d", a.depth)
+	}
+	debuglog.Info("search: %s, depth %s bytes, 1 job(s)", kindStr, depthStr)
+
+	ropblock := flags&gadfinder.Ropblock != 0
+	framed := flags&gadfinder.Unframed == 0
+	for i, fn := range a.binary {
+		base := ""
+		if i < len(a.base) {
+			base = a.base[i]
+		} else if len(a.base) == 1 {
+			base = a.base[0]
+		}
+		data, err := os.ReadFile(fn)
+		if err != nil {
+			continue
+		}
+		bin, err := binfmt.Load(data, base, a.arch, a.raw)
+		if err != nil {
+			continue
+		}
+		info := binfmt.Describe(bin, fn, len(data), ropblock, framed)
+		for _, line := range output.BinaryInfoLines(info) {
+			debuglog.Info("%s", line)
+		}
+	}
+}
+
+func joinPlus(xs []string) string {
+	out := ""
+	for i, x := range xs {
+		if i > 0 {
+			out += "+"
+		}
+		out += x
+	}
+	return out
+}
 
 func (a *args) toFlags() int {
 	f := 0
@@ -293,6 +359,8 @@ func parse(argv []string) (*args, error) {
 			a.keepContra = true
 		case "--keep-canary-address":
 			a.keepCanary = true
+		case "--verbose":
+			a.verbose = true
 		case "--tuple":
 			a.tuple = true
 		case "--ropchain":

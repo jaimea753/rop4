@@ -13,6 +13,7 @@ import (
 
 	"github.com/reverseame/rop4/internal/arch"
 	"github.com/reverseame/rop4/internal/binfmt"
+	"github.com/reverseame/rop4/internal/debuglog"
 	"github.com/reverseame/rop4/internal/disasm"
 	"github.com/reverseame/rop4/internal/gadget"
 	"github.com/reverseame/rop4/internal/roplang"
@@ -96,12 +97,14 @@ func (gf *GadFinder) Find(filenames []string, opt FindOpts) ([]*gadget.Gadget, e
 
 	seen := map[string]*gadget.Gadget{}
 	avoid := gf.avoidBytes(opt.Badchars)
+	total := 0
 	for i, fn := range filenames {
 		gs, err := gf.scanFile(fn, bases[i], opt)
 		if err != nil {
 			return nil, err
 		}
 		for _, g := range gs {
+			total++
 			key := g.Key()
 			if existing, ok := seen[key]; !ok {
 				g.Count = 1
@@ -118,6 +121,9 @@ func (gf *GadFinder) Find(filenames []string, opt FindOpts) ([]*gadget.Gadget, e
 				}
 			}
 		}
+	}
+	if total > 0 || len(seen) > 0 {
+		debuglog.Info("%d unique gadgets (%d duplicates discarded)", len(seen), total-len(seen))
 	}
 	out := make([]*gadget.Gadget, 0, len(seen))
 	for _, g := range seen {

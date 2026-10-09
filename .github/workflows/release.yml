@@ -1,0 +1,69 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Needed so the built-in GITHUB_TOKEN may create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    # Same reason as the CI job: trixie is the first Debian with libcapstone v5
+    # (RISC-V capable), which the CGo wrapper needs to compile.
+    container: debian:trixie
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - name: Install capstone + toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libcapstone-dev pkg-config build-essential git ca-certificates file
+
+      - uses: actions/checkout@v4
+
+      # See ci.yml: run: steps use HOME=/root, so re-trust the workspace here or
+      # git-based VCS stamping aborts with "exit status 128".
+      - name: Trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build rop4 (fully static)
+        run: |
+          # -linkmode external hands the final link to gcc; -extldflags "-static"
+          # makes gcc link libcapstone.a (from libcapstone-dev) and glibc into
+          # the binary, so the release artifact needs no libcapstone on the
+          # target. -lm covers capstone's libm references under static linking,
+          # which pkg-config (invoked without --static by cgo) does not emit.
+          go build -trimpath \
+            -ldflags "-s -w -linkmode external -extldflags '-static -lm'" \
+            -o rop4 ./cmd/rop4
+
+      - name: Verify the binary is static
+        run: |
+          file rop4 || true
+          if ldd rop4 2>&1 | grep -q "not a dynamic executable"; then
+            echo "OK: rop4 is statically linked"
+          else
+            echo "ERROR: rop4 is dynamically linked; aborting release" >&2
+            ldd rop4 || true
+            exit 1
+          fi
+
+      - name: Package tarball
+        run: |
+          tar -czf "rop4-${GITHUB_REF_NAME}-linux-amd64.tar.gz" \
+            rop4 README.md LICENSE AUTHORS
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rop4-*-linux-amd64.tar.gz
+          generate_release_notes: true

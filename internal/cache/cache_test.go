@@ -46,3 +46,21 @@ func TestMiss(t *testing.T) {
 		t.Error("expected miss")
 	}
 }
+
+func TestKeyChangesWithContent(t *testing.T) {
+	c := New(t.TempDir())
+	h1 := FileHash([]byte("aaaa"))
+	h2 := FileHash([]byte("bbbb"))
+	if h1 == h2 {
+		t.Fatal("different content should hash differently")
+	}
+	k1, _ := c.Key(h1, map[string]any{"depth": 5})
+	k2, _ := c.Key(h2, map[string]any{"depth": 5})
+	kSame, _ := c.Key(h1, map[string]any{"depth": 5})
+	if k1 == k2 {
+		t.Error("different file hashes should yield different keys")
+	}
+	if k1 != kSame {
+		t.Error("same hash+params should yield the same key")
+	}
+}

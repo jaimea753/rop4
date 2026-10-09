@@ -38,6 +38,12 @@ type args struct {
 	outputFmt    string
 	tuple        bool
 	version      bool
+	op           string
+	operands     []string
+	dst          string
+	src          string
+	hasDst       bool
+	hasSrc       bool
 }
 
 func main() {
@@ -70,7 +76,17 @@ func main() {
 	if a.tuple {
 		outFmt = "tuple"
 	}
-	if err := output.Gadgets(os.Stdout, gadgets, outFmt); err != nil {
+
+	result := gadgets
+	if a.op != "" {
+		result, err = gf.FindOp(gadgets, a.op, a.operands)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: error: %s\n", toolName(), err)
+			os.Exit(1)
+		}
+	}
+
+	if err := output.Gadgets(os.Stdout, result, outFmt); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: error: %s\n", toolName(), err)
 		os.Exit(1)
 	}
@@ -211,6 +227,26 @@ func parse(argv []string) (*args, error) {
 			a.keepCanary = true
 		case "--tuple":
 			a.tuple = true
+		case "--op":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			a.op = v
+		case "--operands":
+			a.operands = append(a.operands, collectList()...)
+		case "--dst":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			a.dst, a.hasDst = v, true
+		case "--src":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			a.src, a.hasSrc = v, true
 		case "--output":
 			v, err := next(tok)
 			if err != nil {
@@ -222,6 +258,19 @@ func parse(argv []string) (*args, error) {
 			a.outputFmt = v
 		default:
 			return nil, fmt.Errorf("unrecognized argument: %s", tok)
+		}
+	}
+	// Legacy --dst/--src map to positional operands (prefer --operands).
+	if a.hasDst || a.hasSrc {
+		if len(a.operands) > 0 {
+			return nil, fmt.Errorf("--dst/--src cannot be combined with --operands")
+		}
+		if a.hasDst && a.hasSrc {
+			a.operands = []string{a.dst, a.src}
+		} else if a.hasDst {
+			a.operands = []string{a.dst}
+		} else {
+			a.operands = []string{a.src}
 		}
 	}
 	return a, nil

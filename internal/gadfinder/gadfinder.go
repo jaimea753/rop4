@@ -15,6 +15,7 @@ import (
 	"github.com/reverseame/rop4/internal/binfmt"
 	"github.com/reverseame/rop4/internal/disasm"
 	"github.com/reverseame/rop4/internal/gadget"
+	"github.com/reverseame/rop4/internal/roplang"
 	"github.com/reverseame/rop4/internal/search"
 )
 
@@ -45,8 +46,9 @@ type GadFinder struct {
 	Flags int
 	Jobs  int
 
-	arch arch.Arch
-	eng  *disasm.Engine
+	arch     arch.Arch
+	eng      *disasm.Engine
+	rlParser *roplang.Parser
 }
 
 // New builds a finder.

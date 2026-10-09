@@ -1,0 +1,35 @@
+# Load stack delta (compound). TMP_REG is an internal scratch register.
+lsd:
+  operands: 1
+  dst: [op1]
+  src: [op1]
+
+  x86:
+    - steps:
+        - operation: lc
+          op1: TMP_REG
+        - operation: neg
+          op1: op1
+        - operation: and
+          op1: op1
+          op2: TMP_REG
+
+  arm:
+    - steps:
+        - operation: lc
+          op1: TMP_REG
+        - operation: neg
+          op1: op1
+        - operation: and
+          op1: op1
+          op2: TMP_REG
+
+  riscv:
+    - steps:
+        - operation: lc
+          op1: TMP_REG
+        - operation: neg
+          op1: op1
+        - operation: and
+          op1: op1
+          op2: TMP_REG

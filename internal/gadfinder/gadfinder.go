@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"encoding/hex"
 	"sort"
 	"strconv"
 
 	"github.com/reverseame/rop4/internal/arch"
 	"github.com/reverseame/rop4/internal/binfmt"
+	"github.com/reverseame/rop4/internal/cache"
 	"github.com/reverseame/rop4/internal/debuglog"
 	"github.com/reverseame/rop4/internal/disasm"
 	"github.com/reverseame/rop4/internal/gadget"
@@ -50,7 +52,11 @@ type GadFinder struct {
 	arch     arch.Arch
 	eng      *disasm.Engine
 	rlParser *roplang.Parser
+	cache    *cache.Cache
 }
+
+// SetCache enables the on-disk gadget cache rooted at dir ("" -> default dir).
+func (gf *GadFinder) SetCache(dir string) { gf.cache = cache.New(dir) }
 
 // New builds a finder.
 func New(depth, flags, jobs int) *GadFinder {
@@ -186,7 +192,21 @@ func (gf *GadFinder) scanFile(filename, base string, opt FindOpts) ([]*gadget.Ga
 			gf.isValidBytes(raw, opt.BadcharBytes)
 	}
 
+	// Cache lookup.
+	var key string
+	if gf.cache != nil {
+		k, err := gf.cache.Key(cache.FileHash(data), gf.recordParams(bin, depth, a, opt))
+		if err == nil {
+			key = k
+			if recs, ok := gf.cache.Load(key); ok {
+				debuglog.Info("%s: %d gadgets from cache", filepath.Base(filename), len(recs))
+				return gf.reconstruct(filename, a, recs, symTab), nil
+			}
+		}
+	}
+
 	var out []*gadget.Gadget
+	var records []cache.Record
 	for _, sec := range bin.ExecSections() {
 		matches := a.Scan(sec.Opcodes, sec.Vaddr, depth, dis, isValid, terms,
 			acceptCandidate, gf.framed(), gf.has(Ropblock), nil)
@@ -198,9 +218,59 @@ func (gf *GadFinder) scanFile(filename, base string, opt FindOpts) ([]*gadget.Ga
 			g := gadget.New(filename, a, m.Vaddr, m.Decodes, m.Raw, m.Frame)
 			g.Symbol = sym
 			out = append(out, g)
+			if gf.cache != nil {
+				records = append(records, cache.Record{Vaddr: m.Vaddr, Hex: hex.EncodeToString(m.Raw), Frame: m.Frame})
+			}
+		}
+	}
+	if gf.cache != nil && key != "" {
+		if err := gf.cache.Store(key, records); err != nil {
+			debuglog.Warning("%s", err)
 		}
 	}
 	return out, nil
+}
+
+// reconstruct rebuilds gadgets from cached records (rop3 _reconstruct).
+func (gf *GadFinder) reconstruct(filename string, a arch.Arch, recs []cache.Record, symTab *symbolTable) []*gadget.Gadget {
+	out := make([]*gadget.Gadget, 0, len(recs))
+	for _, rec := range recs {
+		raw, err := hex.DecodeString(rec.Hex)
+		if err != nil {
+			continue
+		}
+		decodes, _ := gf.eng.Disasm(raw, rec.Vaddr, 0)
+		sym := ""
+		if symTab != nil {
+			sym = symTab.nearest(rec.Vaddr)
+		}
+		g := gadget.New(filename, a, rec.Vaddr, decodes, raw, rec.Frame)
+		g.Symbol = sym
+		out = append(out, g)
+	}
+	return out
+}
+
+// recordParams mirrors rop3 _record_params: everything besides file content
+// that changes the record set, so a different option misses the cache.
+func (gf *GadFinder) recordParams(bin binfmt.Binary, depth int, a arch.Arch, opt FindOpts) map[string]any {
+	var secs [][]int
+	for _, s := range bin.ExecSections() {
+		secs = append(secs, []int{int(s.Vaddr), len(s.Opcodes)})
+	}
+	bc := append([]string(nil), opt.Badchars...)
+	sort.Strings(bc)
+	bcb := append([]string(nil), opt.BadcharBytes...)
+	sort.Strings(bcb)
+	return map[string]any{
+		"record_version": 2,
+		"depth":          depth,
+		"flags":          gf.Flags,
+		"arch":           []int{int(a.CSArch()), int(a.CSMode())},
+		"badchars":       bc,
+		"badchar_bytes":  bcb,
+		"sections":       secs,
+	}
 }
 
 func (gf *GadFinder) framed() bool { return !gf.has(Unframed) }

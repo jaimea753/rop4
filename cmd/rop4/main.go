@@ -42,6 +42,8 @@ type args struct {
 	keepCanary   bool
 	outputFmt    string
 	tuple        bool
+	cache        bool
+	cacheDir     string
 	verbose      bool
 	version      bool
 	op           string
@@ -76,6 +78,9 @@ func main() {
 		a.printVerboseSummary(flags)
 	}
 	gf := gadfinder.New(a.depth, flags, 1)
+	if a.cache {
+		gf.SetCache(a.cacheDir)
+	}
 	gadgets, err := gf.Find(a.binary, gadfinder.FindOpts{
 		Bases: a.base, Badchars: a.badchar, BadcharBytes: a.badcharBytes,
 		ArchName: a.arch, Symbols: a.symbols, Raw: a.raw,
@@ -359,6 +364,14 @@ func parse(argv []string) (*args, error) {
 			a.keepContra = true
 		case "--keep-canary-address":
 			a.keepCanary = true
+		case "--cache":
+			a.cache = true
+		case "--cache-dir":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			a.cacheDir = v
 		case "--verbose":
 			a.verbose = true
 		case "--tuple":

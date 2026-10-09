@@ -74,7 +74,7 @@ func free(name string) gadfinder.ChainStep {
 // search runs the default engine, returning all solutions (limit 0).
 func search(t *testing.T, gf *gadfinder.GadFinder, gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, prune bool) ([][]*gadget.Gadget, error) {
 	t.Helper()
-	return ropchain.New(gf).Search(gadgets, steps, prune, false, 0, nil)
+	return ropchain.New(gf).Search(gadgets, steps, prune, 0, nil)
 }
 
 func reprs(chain []*gadget.Gadget) []string {
@@ -458,7 +458,7 @@ func TestClassifyEmitsAutofreeEventForTmpReg(t *testing.T) {
 	a, eng := x64Engine(t)
 	gf := x64Finder(t, 0)
 	gadgets := mkGadgets(t, a, eng, twoLsdGadgets)
-	realizations, err := gf.ClassifyRopchain(gadgets, []gadfinder.ChainStep{op("lsd", "rax")}, false)
+	realizations, err := gf.ClassifyRopchain(gadgets, []gadfinder.ChainStep{op("lsd", "rax")})
 	if err != nil {
 		t.Fatal(err)
 	}

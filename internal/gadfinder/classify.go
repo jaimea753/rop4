@@ -9,10 +9,9 @@ import (
 	"github.com/reverseame/rop4/internal/operation"
 )
 
-// Slot-name bases (rop3 gadfinder._FRESH_SLOT_BASE / _TEMP_SLOT_BASE).
+// Fresh generic-slot base (rop3 gadfinder._FRESH_SLOT_BASE).
 const (
 	freshSlotBase = 9000000
-	tempSlotBase  = 9900000
 )
 
 var tempSlotRE = regexp.MustCompile(`^TMP_REG\d*$`)
@@ -59,7 +58,7 @@ func (c *counter) next() int { v := c.n; c.n++; return v }
 // realize it (rop3 GadFinder.classify_ropchain). Returns one Realization per
 // compound-operation alternative; realizations with an unmatchable primitive
 // are dropped.
-func (gf *GadFinder) ClassifyRopchain(gadgets []*gadget.Gadget, steps []ChainStep, legacy bool) ([]Realization, error) {
+func (gf *GadFinder) ClassifyRopchain(gadgets []*gadget.Gadget, steps []ChainStep) ([]Realization, error) {
 	p, err := gf.parser()
 	if err != nil {
 		return nil, err
@@ -67,7 +66,6 @@ func (gf *GadFinder) ClassifyRopchain(gadgets []*gadget.Gadget, steps []ChainSte
 	resolve := func(name string) (*operation.OperationDef, error) { return p.GetOp(name) }
 
 	fresh := &counter{}
-	tempFresh := &counter{}
 
 	type alt struct {
 		chain []operation.Step
@@ -100,7 +98,7 @@ func (gf *GadFinder) ClassifyRopchain(gadgets []*gadget.Gadget, steps []ChainSte
 		}
 		alts := make([]alt, 0, len(alternatives))
 		for _, chain := range alternatives {
-			c, temps := gf.prepareTempSlots(chain, legacy, tempFresh)
+			c, temps := gf.prepareTempSlots(chain)
 			alts = append(alts, alt{chain: c, temps: temps})
 		}
 		perStep = append(perStep, alts)
@@ -167,46 +165,24 @@ func (gf *GadFinder) bindStep(step ChainStep, fresh *counter, defn *operation.Op
 	return binding
 }
 
-// prepareTempSlots mirrors rop3._prepare_temp_slots.
-func (gf *GadFinder) prepareTempSlots(chain []operation.Step, legacy bool, tempFresh *counter) ([]operation.Step, []string) {
+// prepareTempSlots collects an operation's TMP_REG scratch names so the order-
+// aware engine can auto-free them at the operation's boundary
+// (rop3._prepare_temp_slots, default engine).
+func (gf *GadFinder) prepareTempSlots(chain []operation.Step) ([]operation.Step, []string) {
 	var temps []string
 	seen := map[string]bool{}
 	for _, prim := range chain {
 		for _, v := range []any{prim.Op1, prim.Op2} {
 			if isTempSlot(v) {
-				s := v.(string)
-				if !seen[s] {
-					seen[s] = true
-					temps = append(temps, s)
+				str := v.(string)
+				if !seen[str] {
+					seen[str] = true
+					temps = append(temps, str)
 				}
 			}
 		}
 	}
-	if len(temps) == 0 {
-		return chain, nil
-	}
-	if !legacy {
-		return chain, temps
-	}
-	rename := map[string]string{}
-	for _, t := range temps {
-		rename[t] = fmt.Sprintf("REG%d", tempSlotBase+tempFresh.next())
-	}
-	renamed := make([]operation.Step, len(chain))
-	for i, prim := range chain {
-		if s, ok := prim.Op1.(string); ok {
-			if r, ok := rename[s]; ok {
-				prim.Op1 = r
-			}
-		}
-		if s, ok := prim.Op2.(string); ok {
-			if r, ok := rename[s]; ok {
-				prim.Op2 = r
-			}
-		}
-		renamed[i] = prim
-	}
-	return renamed, nil
+	return chain, temps
 }
 
 // matchPrimitives matches each primitive against gadgets (rop3._match_primitives).

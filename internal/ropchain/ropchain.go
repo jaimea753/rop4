@@ -2,8 +2,9 @@
 // rop3/ropchain.py. This is the default order-aware ("sequential") engine plus
 // the ROP-chain-file parser and the free(NAME) handling. The Triton symbolic
 // validation pass is intentionally omitted (excluded from the Go port). The
-// legacy Tree engine (--legacy-ropchain) and raw(...) steps are separate
-// follow-ups.
+// (The legacy rop3 "Tree" engine and its --legacy-ropchain / dst-src comma
+// compatibility shims are intentionally not ported; rop4 keeps only the
+// order-aware engine.)
 package ropchain
 
 import (
@@ -78,7 +79,7 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 				continue
 			}
 			steps = append(steps, gadfinder.ChainStep{
-				Data: m[0], Op: opName, Operands: stripLegacyCommas(opName, raw),
+				Data: m[0], Op: opName, Operands: splitOperands(raw),
 			})
 		} else if comment.MatchString(line) {
 			// comment or blank
@@ -89,18 +90,10 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 	return steps, nil
 }
 
-func stripLegacyCommas(opName string, raw []string) []string {
-	if len(raw) > 0 && raw[0] == "" {
-		debuglog.Warning("%s: a comma before the first operand is a legacy dst/src marker; it is ignored (operands are positional)", opName)
-	} else {
-		for _, a := range raw {
-			if a == "" {
-				debuglog.Warning("%s: an empty operand from a legacy dst/src comma is ignored (operands are positional)", opName)
-				break
-			}
-		}
-	}
-	out := raw[:0:0]
+// splitOperands drops empty tokens from a comma-split operand list (operands
+// are purely positional: op1, op2, ...).
+func splitOperands(raw []string) []string {
+	out := make([]string, 0, len(raw))
 	for _, a := range raw {
 		if a != "" {
 			out = append(out, a)
@@ -158,28 +151,19 @@ type RawContext struct {
 // text); limit==0 yields all. Mirrors rop3 RopChain.search (default engine).
 // raw supplies the target binaries/options for resolving raw(...) steps (nil
 // when there are none).
-func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, pruneEquivalent, legacy bool, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
+func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, pruneEquivalent bool, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
 	checkFreeUsage(steps)
 	if err := rc.resolveRawGadgets(steps, raw); err != nil {
 		return nil, err
 	}
-	// --legacy-ropchain approximates free() by a parse-time rename and then
-	// uses the whole-chain Tree engine (rop3 search: _rewrite_legacy_frees then
-	// the legacy branch of _assemble).
-	if legacy {
-		steps = rewriteLegacyFrees(steps)
-	}
-	realizations, err := rc.gf.ClassifyRopchain(gadgets, steps, legacy)
+
+	realizations, err := rc.gf.ClassifyRopchain(gadgets, steps)
 	if err != nil {
 		return nil, err
 	}
 	var solutions [][]*gadget.Gadget
 	for _, r := range realizations {
-		if legacy {
-			rc.assembleLegacy(r.Bundle, pruneEquivalent, limit, &solutions)
-		} else {
-			rc.assembleSequential(r.Bundle, pruneEquivalent, r.FreeEvents, limit, &solutions)
-		}
+		rc.assembleSequential(r.Bundle, pruneEquivalent, r.FreeEvents, limit, &solutions)
 		if limit > 0 && len(solutions) >= limit {
 			return solutions[:limit], nil
 		}
@@ -192,12 +176,12 @@ func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep
 
 // SearchFromGadgets parses the file then searches (rop3 search_from_gadgets).
 // raw supplies the target binaries/options for raw(...) steps (nil disables).
-func (rc *RopChain) SearchFromGadgets(gadgets []*gadget.Gadget, ropfile string, legacy bool, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
+func (rc *RopChain) SearchFromGadgets(gadgets []*gadget.Gadget, ropfile string, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
 	steps, err := ParseFile(ropfile)
 	if err != nil {
 		return nil, err
 	}
-	return rc.Search(gadgets, steps, true, legacy, limit, raw)
+	return rc.Search(gadgets, steps, true, limit, raw)
 }
 
 // resolveRawGadgets fills in each raw(...) step's inline defn.LiteralGadgets via

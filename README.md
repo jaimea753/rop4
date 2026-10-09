@@ -43,14 +43,23 @@ rop4 --binary libc.so.6 --ropchain chain.txt           # build a ROP chain
 rop4 --binary /bin/ls --interactive                    # REPL, scans once
 ```
 
-The flags mirror rop3: `--rop/--no-rop`, `--jop`, `--retf`, `--ret-imm`, `--frame/
---no-frame`, `--ropblock`, `--depth`, `--all`, `--badchar`, `--badchar-bytes`,
-`--keep-canary-address`, `--base`, `--arch`, `--raw`, `--symbols`, `--reg-aliases`,
-`--allow-undeterministic-gadgets`, `--allow-complex-memory-ops`,
-`--allow-segment-override`, `--keep-contradictory`, `--op`/`--operands` (and the legacy
-`--dst`/`--src`), `--ropchain`/`--exhaustive`/`--legacy-ropchain`, `--output
-text|json|csv`, `--tuple`, `--interactive`, `--jobs`, `--cache`/`--cache-dir`,
-`--verbose`. See rop3's README for the semantics of each; they are identical here.
+Arguments use the Go standard-library `flag` package. Boolean options default
+sensibly and are turned off with the idiomatic `-flag=false` form (there are no
+`--no-xxx` aliases). List options (`-binary`, `-base`, `-badchar`, `-badchar-bytes`,
+`-operands`) are repeatable or comma-separated, e.g. `-operands rdi,rax`. Either one
+or two leading dashes work (`-binary` or `--binary`).
+
+Flags: `-rop` (default on), `-jop`, `-retf`, `-ret-imm`, `-frame` (default on),
+`-ropblock`, `-depth`, `-all`, `-badchar`, `-badchar-bytes`, `-keep-canary-address`,
+`-base`, `-arch`, `-raw`, `-symbols`, `-reg-aliases`, `-allow-undeterministic-gadgets`,
+`-allow-complex-memory-ops`, `-allow-segment-override`, `-keep-contradictory`, `-op`,
+`-operands`, `-ropchain`, `-exhaustive`, `-output text|json|csv`, `-tuple`,
+`-interactive`, `-jobs` (defaults to the CPU count), `-cache`, `-cache-dir`, `-verbose`.
+
+The rop3 backward-compatibility options are intentionally dropped for a cleaner,
+faster tool: the legacy `--dst`/`--src` operand flags, and `--legacy-ropchain` with its
+whole-chain "Tree" engine (rop4 keeps only the order-aware chain engine). Gadget,
+operation and ROP-chain results are otherwise identical to rop3.
 
 ## Tests
 

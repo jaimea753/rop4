@@ -163,8 +163,11 @@ func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep
 	if err := rc.resolveRawGadgets(steps, raw); err != nil {
 		return nil, err
 	}
+	// --legacy-ropchain approximates free() by a parse-time rename and then
+	// uses the whole-chain Tree engine (rop3 search: _rewrite_legacy_frees then
+	// the legacy branch of _assemble).
 	if legacy {
-		return nil, fmt.Errorf("--legacy-ropchain is not yet implemented")
+		steps = rewriteLegacyFrees(steps)
 	}
 	realizations, err := rc.gf.ClassifyRopchain(gadgets, steps, legacy)
 	if err != nil {
@@ -172,7 +175,11 @@ func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep
 	}
 	var solutions [][]*gadget.Gadget
 	for _, r := range realizations {
-		rc.assembleSequential(r.Bundle, pruneEquivalent, r.FreeEvents, limit, &solutions)
+		if legacy {
+			rc.assembleLegacy(r.Bundle, pruneEquivalent, limit, &solutions)
+		} else {
+			rc.assembleSequential(r.Bundle, pruneEquivalent, r.FreeEvents, limit, &solutions)
+		}
 		if limit > 0 && len(solutions) >= limit {
 			return solutions[:limit], nil
 		}

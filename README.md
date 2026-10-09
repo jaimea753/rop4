@@ -39,7 +39,8 @@ toolchain, then `CGO_ENABLED=1 go build ./cmd/rop4`.
 ```sh
 rop4 --binary /bin/ls                                  # dump gadgets
 rop4 --binary /bin/ls --op mov --operands rdi rax      # search an operation
-rop4 --binary libc.so.6 --ropchain chain.txt           # build a ROP chain
+rop4 --binary libc.so.6 --ropchain chain.txt           # build a ROP chain from a file
+rop4 --binary libc.so.6 --ropchain mprotect            # build a bundled ROP chain
 rop4 --binary /bin/ls --interactive                    # REPL, scans once
 ```
 
@@ -60,6 +61,70 @@ The rop3 backward-compatibility options are intentionally dropped for a cleaner,
 faster tool: the legacy `--dst`/`--src` operand flags, and `--legacy-ropchain` with its
 whole-chain "Tree" engine (rop4 keeps only the order-aware chain engine). Gadget,
 operation and ROP-chain results are otherwise identical to rop3.
+
+## Writing ROP chains
+
+`--ropchain` takes a ROPLang chain. The value is either a path to a chain file or,
+when no such file exists, the name of a chain bundled inside rop4 (see below). rop4
+parses the chain into high-level operations, matches each against the gadgets found
+in the target binary, and assembles a working chain with a backtracking search.
+
+A chain file is plain text, one step per line. Blank lines are ignored and `;` starts
+a comment to end of line. Each step is either an operation call or a `raw(...)` step:
+
+```
+; mprotect(addr, len, PROT_READ|PROT_WRITE|PROT_EXEC) on amd64
+lc(rdi)          ; rdi <- addr    page-aligned base
+lc(rsi)          ; rsi <- len     region length
+lc(rdx)          ; rdx <- 7       PROT_READ|PROT_WRITE|PROT_EXEC
+lc(rax)          ; rax <- 10      mprotect syscall number
+raw([syscall], [], [], [rdi, rsi, rdx, rax])
+```
+
+**Operations** are written `op(operand, operand, ...)` with positional operands
+drawn from the ROPLang catalog (`internal/roplang/roplang/*.yaml`). Common ones:
+
+- `lc(reg)` — load a constant into `reg` (a stack pop the caller fills in);
+- `mov(dst, src)`, `add(dst, src)` — register-to-register data and arithmetic;
+- `ld(dst, src)` — load from memory at `src` into `dst`; `st(dst, src)` — store `src`
+  to memory at `dst`;
+- `jmp(reg)` — transfer control to the address in `reg`;
+- `free(reg)` — release a generic register slot so the search may reuse it.
+
+An operand is either a **concrete register** for the target architecture (`rdi`, `rax`
+on amd64; `ebx` on x86; `x0` on AArch64; `a0` on RISC-V) or a **generic slot**
+(`reg1`, `reg2`, ..., or `TMP_REG*`). A generic slot lets the search pick any suitable
+register; `free(regN)` ends a slot's lifetime so it can be reused later in the chain.
+
+**Raw steps** pin exact instructions when no operation expresses them, written
+`raw([mnemonics], [immediates], [stack], [clobbered regs])`. The mnemonic list gives
+the instructions to locate (e.g. `[syscall]`, `[mov, svc]`), and the last list names
+the registers the step consumes. rop4 resolves each raw step by rescanning the target
+binary for a matching gadget, so raw steps work with no external assembler.
+
+### Bundled chains
+
+rop4 ships a few example chains embedded in the binary. Pass a bare name and rop4
+loads the variant for the target binary's detected architecture, so the same command
+works across architectures:
+
+```sh
+rop4 --binary ./target --ropchain mprotect      # make a page RWX, then jump into it
+rop4 --binary ./target --ropchain syscall_exec  # execve("/bin/sh", ...) via syscall
+rop4 --binary ./target --ropchain turing         # a Turing machine in ROP (amd64)
+```
+
+| Name           | Architectures                 |
+|----------------|-------------------------------|
+| `mprotect`     | amd64, x86, aarch64, riscv    |
+| `syscall_exec` | amd64, x86, aarch64, riscv    |
+| `turing`       | amd64                         |
+
+A name with no variant for the detected architecture (for example `turing` on a
+non-amd64 binary) reports which architectures it does cover. A real file path always
+takes precedence over a bundled name. The chain sources live in
+`internal/ropchain/chains/` and are embedded with `//go:embed`; add a
+`<name>_<arch>.txt` there to ship another one.
 
 ## Python API
 

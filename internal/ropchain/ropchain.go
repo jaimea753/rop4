@@ -9,11 +9,14 @@ package ropchain
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/reverseame/rop4/internal/arch"
 	"github.com/reverseame/rop4/internal/debuglog"
 	"github.com/reverseame/rop4/internal/gadfinder"
 	"github.com/reverseame/rop4/internal/gadget"
@@ -50,13 +53,19 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseBytes(data, path)
+}
+
+// ParseBytes parses ROPLang chain text into steps. source labels the input in
+// per-line error messages (a file path, or a bundled-chain name).
+func ParseBytes(data []byte, source string) ([]gadfinder.ChainStep, error) {
 	var steps []gadfinder.ChainStep
 	for i, line := range strings.Split(string(data), "\n") {
 		lineNo := i + 1
 		if regexRaw.MatchString(line) {
 			step, err := parseRawLine(line)
 			if err != nil {
-				return nil, fmt.Errorf("%s: line %d: %s: %w", path, lineNo, strings.TrimSpace(line), err)
+				return nil, fmt.Errorf("%s: line %d: %s: %w", source, lineNo, strings.TrimSpace(line), err)
 			}
 			steps = append(steps, step)
 			continue
@@ -73,7 +82,7 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 			if opName == "free" {
 				fe, err := parseFreeLine(m[0], raw)
 				if err != nil {
-					return nil, fmt.Errorf("%s: line %d: %s: %w", path, lineNo, line, err)
+					return nil, fmt.Errorf("%s: line %d: %s: %w", source, lineNo, line, err)
 				}
 				steps = append(steps, fe)
 				continue
@@ -84,7 +93,7 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 		} else if comment.MatchString(line) {
 			// comment or blank
 		} else {
-			return nil, fmt.Errorf("%s: line %d: %s: unable to parse operation", path, lineNo, line)
+			return nil, fmt.Errorf("%s: line %d: %s: unable to parse operation", source, lineNo, line)
 		}
 	}
 	return steps, nil
@@ -174,14 +183,96 @@ func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep
 	return solutions, nil
 }
 
-// SearchFromGadgets parses the file then searches (rop3 search_from_gadgets).
-// raw supplies the target binaries/options for raw(...) steps (nil disables).
+// SearchFromGadgets parses the chain request then searches (rop3
+// search_from_gadgets). ropfile is either a path to a ROPLang file or, when no
+// such file exists, the name of a bundled chain (e.g. "turing"), resolved to the
+// embedded variant for the target binary's detected architecture. raw supplies
+// the target binaries/options for raw(...) steps (nil disables).
 func (rc *RopChain) SearchFromGadgets(gadgets []*gadget.Gadget, ropfile string, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
-	steps, err := ParseFile(ropfile)
+	steps, err := rc.parseRopRequest(ropfile)
 	if err != nil {
 		return nil, err
 	}
 	return rc.Search(gadgets, steps, true, limit, raw)
+}
+
+// parseRopRequest resolves ropfile to chain steps. An existing file on disk is
+// always loaded as-is; otherwise ropfile is treated as a bundled-chain name and
+// matched against the embedded chains for the target's detected architecture.
+func (rc *RopChain) parseRopRequest(ropfile string) ([]gadfinder.ChainStep, error) {
+	if _, err := os.Stat(ropfile); err == nil {
+		return ParseFile(ropfile)
+	}
+	data, name, err := rc.lookupEmbeddedChain(ropfile)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBytes(data, name)
+}
+
+// lookupEmbeddedChain returns the bundled chain for the given name and the
+// target's detected architecture, or an error naming what is available.
+func (rc *RopChain) lookupEmbeddedChain(name string) (data []byte, label string, err error) {
+	token := archToken(rc.gf.Arch())
+	if token != "" {
+		file := "chains/" + name + "_" + token + ".txt"
+		if b, rerr := embeddedChains.ReadFile(file); rerr == nil {
+			return b, "<bundled chain " + name + "_" + token + ">", nil
+		}
+	}
+	avail := listEmbeddedChains()
+	if arches, ok := avail[name]; ok {
+		return nil, "", fmt.Errorf("no bundled ROP chain %q for arch %q (that chain is available for: %s)",
+			name, token, strings.Join(arches, ", "))
+	}
+	names := make([]string, 0, len(avail))
+	for n := range avail {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return nil, "", fmt.Errorf("%q is neither a readable file nor a bundled ROP chain (bundled chains: %s)",
+		name, strings.Join(names, ", "))
+}
+
+// archToken maps a detected architecture to the suffix used by the embedded
+// chain filenames (chains/<name>_<token>.txt). It returns "" for an arch that
+// has no bundled chains.
+func archToken(a arch.Arch) string {
+	switch a.(type) {
+	case *arch.X64:
+		return "amd64"
+	case *arch.X86:
+		return "x86"
+	case *arch.AArch64:
+		return "aarch64"
+	case *arch.RISCV:
+		return "riscv"
+	default:
+		return ""
+	}
+}
+
+// listEmbeddedChains groups the embedded chains by base name, mapping each to
+// its sorted list of available architecture tokens.
+func listEmbeddedChains() map[string][]string {
+	out := map[string][]string{}
+	entries, err := fs.ReadDir(embeddedChains, "chains")
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		base := strings.TrimSuffix(e.Name(), path.Ext(e.Name()))
+		i := strings.LastIndex(base, "_")
+		if i <= 0 {
+			continue
+		}
+		name, token := base[:i], base[i+1:]
+		out[name] = append(out[name], token)
+	}
+	for n := range out {
+		sort.Strings(out[n])
+	}
+	return out
 }
 
 // resolveRawGadgets fills in each raw(...) step's inline defn.LiteralGadgets via

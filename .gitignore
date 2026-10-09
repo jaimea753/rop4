@@ -5,3 +5,4 @@ python/librop4.so
 python/librop4.h
 python/__pycache__/
 *.pyc
+/main

@@ -10,8 +10,11 @@ import (
 	"strconv"
 	"strings"
 
+	"errors"
+
 	"github.com/reverseame/rop4/internal/gadfinder"
 	"github.com/reverseame/rop4/internal/output"
+	"github.com/reverseame/rop4/internal/ropchain"
 )
 
 type args struct {
@@ -40,6 +43,9 @@ type args struct {
 	version      bool
 	op           string
 	operands     []string
+	ropchainFile string
+	exhaustive   bool
+	legacyChain  bool
 	dst          string
 	src          string
 	hasDst       bool
@@ -77,19 +83,81 @@ func main() {
 		outFmt = "tuple"
 	}
 
-	result := gadgets
-	if a.op != "" {
-		result, err = gf.FindOp(gadgets, a.op, a.operands)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: error: %s\n", toolName(), err)
-			os.Exit(1)
-		}
-	}
-
-	if err := output.Gadgets(os.Stdout, result, outFmt); err != nil {
+	fail := func(err error) {
 		fmt.Fprintf(os.Stderr, "%s: error: %s\n", toolName(), err)
 		os.Exit(1)
 	}
+
+	switch {
+	case a.ropchainFile != "":
+		// Non-exhaustive text/tuple consumes only the first chain (rop3).
+		limit := 0
+		if !a.exhaustive && (outFmt == "text" || outFmt == "tuple") {
+			limit = 1
+		}
+		chains, err := ropchain.New(gf).SearchFromGadgets(gadgets, a.ropchainFile, a.legacyChain, limit)
+		if err != nil {
+			var rcnf *gadfinder.RopChainNotFound
+			if errors.As(err, &rcnf) {
+				fail(fmt.Errorf("No ROP chain found: %s", rcnf.Error()))
+			}
+			fail(err)
+		}
+		if err := output.Ropchains(os.Stdout, chains, outFmt, a.exhaustive); err != nil {
+			fail(err)
+		}
+	case a.op != "":
+		result, err := gf.FindOp(gadgets, a.op, a.operands)
+		if err == nil {
+			if err := output.Gadgets(os.Stdout, result, outFmt); err != nil {
+				fail(err)
+			}
+			return
+		}
+		// A compound operation expands into ROP chains (rop3 find_op_from_gadgets).
+		if errors.Is(err, gadfinder.ErrCompoundUnsupported) {
+			step := gadfinder.ChainStep{Op: a.op, Operands: a.operands,
+				Data: a.op + "(" + joinComma(a.operands) + ")"}
+			chains, cerr := ropchain.New(gf).Search(gadgets, []gadfinder.ChainStep{step}, false, false, 0)
+			if cerr != nil {
+				var rcnf *gadfinder.RopChainNotFound
+				if errors.As(cerr, &rcnf) {
+					// No chains: rop3 returns an empty list (no error) for compound --op.
+					chains = nil
+				} else {
+					fail(cerr)
+				}
+			}
+			// rop3 gates on `result and isinstance(result[0], list)`: an empty
+			// compound result falls back to the plain (empty) gadget output.
+			if len(chains) == 0 {
+				if err := output.Gadgets(os.Stdout, nil, outFmt); err != nil {
+					fail(err)
+				}
+				return
+			}
+			if err := output.Ropchains(os.Stdout, chains, outFmt, true); err != nil {
+				fail(err)
+			}
+			return
+		}
+		fail(err)
+	default:
+		if err := output.Gadgets(os.Stdout, gadgets, outFmt); err != nil {
+			fail(err)
+		}
+	}
+}
+
+func joinComma(xs []string) string {
+	out := ""
+	for i, x := range xs {
+		if i > 0 {
+			out += ", "
+		}
+		out += x
+	}
+	return out
 }
 
 func toolName() string { return "rop4" }
@@ -227,6 +295,20 @@ func parse(argv []string) (*args, error) {
 			a.keepCanary = true
 		case "--tuple":
 			a.tuple = true
+		case "--ropchain":
+			v, err := next(tok)
+			if err != nil {
+				return nil, err
+			}
+			a.ropchainFile = v
+		case "--exhaustive":
+			a.exhaustive = true
+		case "--no-exhaustive":
+			a.exhaustive = false
+		case "--legacy-ropchain":
+			a.legacyChain = true
+		case "--no-legacy-ropchain":
+			a.legacyChain = false
 		case "--op":
 			v, err := next(tok)
 			if err != nil {

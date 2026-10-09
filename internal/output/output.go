@@ -113,6 +113,16 @@ func Gadgets(w io.Writer, gadgets []*gadget.Gadget, format string) error {
 	return nil
 }
 
+// pyListRepr renders a string slice as a Python list literal, matching how
+// rop3's csv.DictWriter stringifies the dst/src list fields (e.g. ['rax', 'rbx']).
+func pyListRepr(xs []string) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = "'" + x + "'"
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 func csvRecord(g *gadget.Gadget, cols []string) []string {
 	d := g.ToDict()
 	row := make([]string, len(cols))
@@ -125,8 +135,9 @@ func csvRecord(g *gadget.Gadget, cols []string) []string {
 				row[i] = fmt.Sprintf("%d", c)
 			}
 		case "dst", "src":
+			// rop3's csv.DictWriter stringifies the Python list, e.g. ['rdi'].
 			if v, ok := d[c].([]string); ok {
-				row[i] = strings.Join(v, " ")
+				row[i] = pyListRepr(v)
 			}
 		default:
 			if s, ok := d[c].(string); ok {
@@ -135,4 +146,66 @@ func csvRecord(g *gadget.Gadget, cols []string) []string {
 		}
 	}
 	return row
+}
+
+// printRopchain prints one chain; when idx>0 it is wrapped with a header and a
+// trailing blank line (rop3 print_ropchain).
+func printRopchain(w io.Writer, chain []*gadget.Gadget, idx int, format string) {
+	if idx > 0 {
+		fmt.Fprintf(w, "%s Ropchain %d %s\n", strings.Repeat("#", 40), idx, strings.Repeat("#", 40))
+	}
+	for _, g := range chain {
+		if format == "tuple" {
+			fmt.Fprintln(w, gadgetTupleLine(g))
+		} else {
+			fmt.Fprintln(w, g.String())
+		}
+	}
+	if idx > 0 {
+		fmt.Fprintln(w)
+	}
+}
+
+// Ropchains writes ROP chains (each a gadget list) in the given format
+// (rop3 output_ropchains). For text/tuple without exhaustive, only the first
+// chain is printed (unheadered).
+func Ropchains(w io.Writer, chains [][]*gadget.Gadget, format string, exhaustive bool) error {
+	if (format == "text" || format == "tuple") && !exhaustive {
+		if len(chains) > 0 {
+			printRopchain(w, chains[0], 0, format)
+		}
+		return nil
+	}
+	switch format {
+	case "json":
+		arr := make([][]gadgetJSON, len(chains))
+		for i, chain := range chains {
+			row := make([]gadgetJSON, len(chain))
+			for j, g := range chain {
+				row[j] = toJSON(g)
+			}
+			arr[i] = row
+		}
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		return enc.Encode(arr)
+	case "csv":
+		cw := csv.NewWriter(w)
+		cw.UseCRLF = true
+		cols := []string{"file", "vaddr", "gadget", "bytes", "count", "symbol", "op", "dst", "src", "modifies"}
+		cw.Write(append([]string{"chain"}, cols...))
+		for idx, chain := range chains {
+			for _, g := range chain {
+				cw.Write(append([]string{fmt.Sprintf("%d", idx+1)}, csvRecord(g, cols)...))
+			}
+		}
+		cw.Flush()
+		return cw.Error()
+	default: // text or tuple
+		for idx, chain := range chains {
+			printRopchain(w, chain, idx+1, format)
+		}
+	}
+	return nil
 }

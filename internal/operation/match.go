@@ -184,6 +184,18 @@ func annotate(a arch.Arch, defn *OperationDef, bindings map[string]any,
 	return &matched
 }
 
+// MatchesExactly reports whether decodes is exactly this pattern, position for
+// position -- no anchoring/frame skipping, just an exact-length equality check
+// (ports rop3 Set.matches_exactly). Used by GadFinder.FindRawGadgets to test a
+// scanned candidate window with no gadget/frame concept involved.
+func (s *Set) MatchesExactly(a arch.Arch, allowRegAliases bool, decodes []*disasm.Insn) bool {
+	if len(decodes) != len(s.Items) {
+		return false
+	}
+	_, _, ok := matchRun(a, allowRegAliases, s, decodes, 0)
+	return ok
+}
+
 // --- Set matching (iter_matches / _match_run) -----------------------------
 
 // allMatches returns every (bindings, indices) at which the pattern matches.

@@ -19,13 +19,16 @@ type Shell struct {
 	gf       *gadfinder.GadFinder
 	gadgets  []*gadget.Gadget
 	binaries []string
+	opt      gadfinder.FindOpts
 	in       io.Reader
 	out      io.Writer
 }
 
-// New builds a shell over an already-scanned gadget list.
-func New(gf *gadfinder.GadFinder, gadgets []*gadget.Gadget, binaries []string, in io.Reader, out io.Writer) *Shell {
-	return &Shell{gf: gf, gadgets: gadgets, binaries: binaries, in: in, out: out}
+// New builds a shell over an already-scanned gadget list. opt carries the scan
+// options used so a chain file's raw(...) steps can be resolved against the
+// binaries.
+func New(gf *gadfinder.GadFinder, gadgets []*gadget.Gadget, binaries []string, opt gadfinder.FindOpts, in io.Reader, out io.Writer) *Shell {
+	return &Shell{gf: gf, gadgets: gadgets, binaries: binaries, opt: opt, in: in, out: out}
 }
 
 const intro = `rop4 interactive mode. The binary is scanned once; type "help" or "?" for commands.`
@@ -95,7 +98,7 @@ func (s *Shell) doOp(arg string) {
 	}
 	if errors.Is(err, gadfinder.ErrCompoundUnsupported) {
 		step := gadfinder.ChainStep{Op: op, Operands: operands, Data: op + "(" + strings.Join(operands, ", ") + ")"}
-		chains, cerr := ropchain.New(s.gf).Search(s.gadgets, []gadfinder.ChainStep{step}, false, false, 0)
+		chains, cerr := ropchain.New(s.gf).Search(s.gadgets, []gadfinder.ChainStep{step}, false, false, 0, nil)
 		if cerr != nil {
 			var rcnf *gadfinder.RopChainNotFound
 			if !errors.As(cerr, &rcnf) {
@@ -118,7 +121,7 @@ func (s *Shell) doChain(arg string) {
 		fmt.Fprintln(s.out, "usage: chain <file>")
 		return
 	}
-	chains, err := ropchain.New(s.gf).SearchFromGadgets(s.gadgets, arg, false, 1)
+	chains, err := ropchain.New(s.gf).SearchFromGadgets(s.gadgets, arg, false, 1, &ropchain.RawContext{Binaries: s.binaries, Opt: s.opt})
 	if err != nil {
 		var rcnf *gadfinder.RopChainNotFound
 		if errors.As(err, &rcnf) {

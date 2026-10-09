@@ -53,7 +53,12 @@ func ParseFile(path string) ([]gadfinder.ChainStep, error) {
 	for i, line := range strings.Split(string(data), "\n") {
 		lineNo := i + 1
 		if regexRaw.MatchString(line) {
-			return nil, fmt.Errorf("%s: line %d: raw(...) steps are not yet implemented", path, lineNo)
+			step, err := parseRawLine(line)
+			if err != nil {
+				return nil, fmt.Errorf("%s: line %d: %s: %w", path, lineNo, strings.TrimSpace(line), err)
+			}
+			steps = append(steps, step)
+			continue
 		}
 		if m := regexOp.FindStringSubmatch(line); m != nil {
 			opName := m[1]
@@ -139,11 +144,25 @@ func checkFreeUsage(steps []gadfinder.ChainStep) {
 	}
 }
 
+// RawContext carries what a raw(...) chain step's direct scan needs: the target
+// binaries and the scan options (rop3 search's binaries/base/badchars/arch/raw
+// parameters). nil (or empty Binaries) means a raw step degrades to matching
+// only against the given gadgets, as rop3 does without binaries.
+type RawContext struct {
+	Binaries []string
+	Opt      gadfinder.FindOpts
+}
+
 // Search parses nothing; it takes already-parsed steps, classifies, and
 // assembles. limit>0 stops after that many solutions (1 for non-exhaustive
 // text); limit==0 yields all. Mirrors rop3 RopChain.search (default engine).
-func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, pruneEquivalent, legacy bool, limit int) ([][]*gadget.Gadget, error) {
+// raw supplies the target binaries/options for resolving raw(...) steps (nil
+// when there are none).
+func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep, pruneEquivalent, legacy bool, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
 	checkFreeUsage(steps)
+	if err := rc.resolveRawGadgets(steps, raw); err != nil {
+		return nil, err
+	}
 	if legacy {
 		return nil, fmt.Errorf("--legacy-ropchain is not yet implemented")
 	}
@@ -165,12 +184,37 @@ func (rc *RopChain) Search(gadgets []*gadget.Gadget, steps []gadfinder.ChainStep
 }
 
 // SearchFromGadgets parses the file then searches (rop3 search_from_gadgets).
-func (rc *RopChain) SearchFromGadgets(gadgets []*gadget.Gadget, ropfile string, legacy bool, limit int) ([][]*gadget.Gadget, error) {
+// raw supplies the target binaries/options for raw(...) steps (nil disables).
+func (rc *RopChain) SearchFromGadgets(gadgets []*gadget.Gadget, ropfile string, legacy bool, limit int, raw *RawContext) ([][]*gadget.Gadget, error) {
 	steps, err := ParseFile(ropfile)
 	if err != nil {
 		return nil, err
 	}
-	return rc.Search(gadgets, steps, true, legacy, limit)
+	return rc.Search(gadgets, steps, true, legacy, limit, raw)
+}
+
+// resolveRawGadgets fills in each raw(...) step's inline defn.LiteralGadgets via
+// GadFinder.FindRawGadgets (rop3 RopChain._resolve_raw_gadgets). A step whose
+// LiteralGadgets is already resolved is not rescanned.
+func (rc *RopChain) resolveRawGadgets(steps []gadfinder.ChainStep, raw *RawContext) error {
+	if raw == nil || len(raw.Binaries) == 0 {
+		return nil
+	}
+	for _, step := range steps {
+		defn := step.Defn
+		if defn == nil || defn.LiteralGadgets != nil {
+			continue
+		}
+		gs, err := rc.gf.FindRawGadgets(raw.Binaries, defn, raw.Opt)
+		if err != nil {
+			return err
+		}
+		if gs == nil {
+			gs = []*gadget.Gadget{} // mark resolved (rop3 sets [] on no hit)
+		}
+		defn.LiteralGadgets = gs
+	}
+	return nil
 }
 
 // prune removes gadgets subsumed by an earlier kept gadget (rop3 _prune).

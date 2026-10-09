@@ -95,7 +95,11 @@ func main() {
 	}
 
 	if a.interactive {
-		repl.New(gf, gadgets, a.binary, os.Stdin, os.Stdout).Run()
+		replOpt := gadfinder.FindOpts{
+			Bases: a.base, Badchars: a.badchar, BadcharBytes: a.badcharBytes,
+			ArchName: a.arch, Symbols: a.symbols, Raw: a.raw,
+		}
+		repl.New(gf, gadgets, a.binary, replOpt, os.Stdin, os.Stdout).Run()
 		return
 	}
 
@@ -116,7 +120,11 @@ func main() {
 		if !a.exhaustive && (outFmt == "text" || outFmt == "tuple") {
 			limit = 1
 		}
-		chains, err := ropchain.New(gf).SearchFromGadgets(gadgets, a.ropchainFile, a.legacyChain, limit)
+		rawCtx := &ropchain.RawContext{Binaries: a.binary, Opt: gadfinder.FindOpts{
+			Bases: a.base, Badchars: a.badchar, BadcharBytes: a.badcharBytes,
+			ArchName: a.arch, Raw: a.raw,
+		}}
+		chains, err := ropchain.New(gf).SearchFromGadgets(gadgets, a.ropchainFile, a.legacyChain, limit, rawCtx)
 		if err != nil {
 			var rcnf *gadfinder.RopChainNotFound
 			if errors.As(err, &rcnf) {
@@ -139,7 +147,7 @@ func main() {
 		if errors.Is(err, gadfinder.ErrCompoundUnsupported) {
 			step := gadfinder.ChainStep{Op: a.op, Operands: a.operands,
 				Data: a.op + "(" + joinComma(a.operands) + ")"}
-			chains, cerr := ropchain.New(gf).Search(gadgets, []gadfinder.ChainStep{step}, false, false, 0)
+			chains, cerr := ropchain.New(gf).Search(gadgets, []gadfinder.ChainStep{step}, false, false, 0, nil)
 			if cerr != nil {
 				var rcnf *gadfinder.RopChainNotFound
 				if errors.As(cerr, &rcnf) {

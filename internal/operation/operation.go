@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/reverseame/rop4/internal/gadget"
 )
 
 // Abstract operand placeholders: operation operands op1, op2, op3, ..., generic
@@ -297,6 +299,12 @@ type OperationDef struct {
 	Realizations      []*Realization
 	Available         bool
 	UnavailableReason string
+	// LiteralGadgets holds the verbatim-pattern candidates a raw(...) chain
+	// step's direct scan found (rop3 OperationDef.literal_gadgets). nil until
+	// resolved by RopChain.Search; only an inline raw defn ever sets it. They
+	// are added to the matching pool for that step alone (gadfinder
+	// matchPrimitives), never merged into the shared gadget pool.
+	LiteralGadgets []*gadget.Gadget
 }
 
 // NewOperationDef builds an OperationDef (available by default).
@@ -312,6 +320,17 @@ func NewOperationDef(name string, operands int, dstRoles, srcRoles []string) *Op
 
 // Add appends a built realization.
 func (d *OperationDef) Add(r *Realization) { d.Realizations = append(d.Realizations, r) }
+
+// RawPattern returns the verbatim gadget-pattern Set of an inline raw(...)
+// definition (rop3 defn.realizations[0].links[0]), or nil when this is not a
+// single-Set realization.
+func (d *OperationDef) RawPattern() *Set {
+	if len(d.Realizations) == 0 || len(d.Realizations[0].Links) == 0 {
+		return nil
+	}
+	s, _ := d.Realizations[0].Links[0].(*Set)
+	return s
+}
 
 // MarkUnavailable flags this operation as not realizable on the current arch.
 func (d *OperationDef) MarkUnavailable(reason string) {

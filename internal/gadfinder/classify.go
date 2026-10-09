@@ -214,7 +214,16 @@ func (gf *GadFinder) matchPrimitives(gadgets []*gadget.Gadget, primitives []oper
 	bundle := make([]ClassifiedStep, 0, len(primitives))
 	for _, prim := range primitives {
 		operands := []any{gf.resolveOperandAny(prim.Op1), gf.resolveOperandAny(prim.Op2)}
-		gads, err := operation.MatchGadgets(gf.arch, gf.has(AllowRegAliases), prim.Defn, operands, gadgets, true)
+		// A raw(...) primitive may carry its own literal_gadgets (candidates
+		// found by FindRawGadgets's direct scan). They join the pool for THIS
+		// primitive only, never merged into the shared gadget pool: a raw gadget
+		// with no terminator returns control nowhere, so leaking one into the
+		// shared pool could let an unrelated step pick it (rop3 _match_primitives).
+		pool := gadgets
+		if prim.Defn != nil && len(prim.Defn.LiteralGadgets) > 0 {
+			pool = append(append([]*gadget.Gadget(nil), gadgets...), prim.Defn.LiteralGadgets...)
+		}
+		gads, err := operation.MatchGadgets(gf.arch, gf.has(AllowRegAliases), prim.Defn, operands, pool, true)
 		if err != nil || len(gads) == 0 {
 			return nil
 		}

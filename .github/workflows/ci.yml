@@ -20,6 +20,12 @@ jobs:
           apt-get install -y --no-install-recommends \
             libcapstone-dev pkg-config build-essential git ca-certificates
       - uses: actions/checkout@v4
+      # The run: steps below use the container's default HOME (/root), while
+      # actions/checkout records its safe.directory under the action's HOME
+      # (/github/home). Without this, git inside `go build` sees the workspace
+      # as dubiously owned and aborts VCS stamping with "exit status 128".
+      - name: Trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

@@ -83,9 +83,6 @@ func (gf *GadFinder) has(flag int) bool { return gf.Flags&flag != 0 }
 
 // Find scans the named binaries and returns the (deduplicated, sorted) gadgets.
 func (gf *GadFinder) Find(filenames []string, opt FindOpts) ([]*gadget.Gadget, error) {
-	if gf.has(Ropblock) {
-		return nil, fmt.Errorf("--ropblock not yet implemented")
-	}
 	bases := gf.normalizeBases(opt.Bases, len(filenames))
 
 	if gf.has(KeepDuplicates) {
@@ -214,9 +211,13 @@ func (gf *GadFinder) scanFile(filename, base string, opt FindOpts) ([]*gadget.Ga
 		if gf.Jobs > 1 {
 			debuglog.Info("%s scan runs single-threaded; --jobs ignored", a.ScanName(gf.has(Ropblock), gf.framed()))
 		}
+		var acceptDecodes func([]*disasm.Insn) bool
+		if gf.has(Ropblock) {
+			acceptDecodes = gf.makeRopblockBodyOK(a)
+		}
 		for _, sec := range bin.ExecSections() {
 			matches = append(matches, a.Scan(sec.Opcodes, sec.Vaddr, depth, dis, isValid, terms,
-				acceptCandidate, gf.framed(), gf.has(Ropblock), nil)...)
+				acceptCandidate, gf.framed(), gf.has(Ropblock), acceptDecodes)...)
 		}
 	}
 
@@ -327,6 +328,34 @@ func (gf *GadFinder) makeIsValidGadget(a arch.Arch) func([]*disasm.Insn) bool {
 			return false
 		}
 		return ret
+	}
+}
+
+// makeRopblockBodyOK builds the supplementary body filter the ordinary scans
+// apply via is_valid_*_gadget but the abstract-gadget (ropblock) search's own
+// terminator/frame logic does not (rop3 GadFinder._ropblock_body_ok): the
+// first-instruction complex-memory and segment-override filters, and the
+// intermediate conditional-branch rejection (unless --allow-undeterministic).
+func (gf *GadFinder) makeRopblockBodyOK(a arch.Arch) func([]*disasm.Insn) bool {
+	cond := a.ConditionalBranchMnemonics()
+	return func(decodes []*disasm.Insn) bool {
+		if !gf.has(AllowComplexMem) && a.FirstInsnHasComplexMem(decodes) {
+			return false
+		}
+		if !gf.has(AllowSegmentOverride) && a.FirstInsnHasSegmentOverride(decodes) {
+			return false
+		}
+		if !gf.has(AllowUndeterministic) {
+			for _, ins := range decodes[:len(decodes)-1] {
+				m := a.BaseMnemonic(ins.Mnemonic)
+				for _, c := range cond {
+					if c == m {
+						return false
+					}
+				}
+			}
+		}
+		return true
 	}
 }
 

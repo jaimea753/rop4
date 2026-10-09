@@ -42,6 +42,7 @@ type args struct {
 	allowSeg     bool
 	keepContra   bool
 	keepCanary   bool
+	ropblock     bool
 	outputFmt    string
 	tuple        bool
 	interactive  bool
@@ -279,6 +280,9 @@ func (a *args) toFlags() int {
 	if a.allowSeg {
 		f |= gadfinder.AllowSegmentOverride
 	}
+	if a.ropblock {
+		f |= gadfinder.Ropblock
+	}
 	return f
 }
 
@@ -360,6 +364,8 @@ func parse(argv []string) (*args, error) {
 			a.frame = true
 		case "--no-frame":
 			a.frame = false
+		case "--ropblock":
+			a.ropblock = true
 		case "--reg-aliases":
 			a.regAliases = true
 		case "--allow-undeterministic-gadgets":

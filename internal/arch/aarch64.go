@@ -81,7 +81,7 @@ func (a *AArch64) Scan(opcodes []byte, baseVaddr uint64, depth int, dis search.D
 	acceptCandidate func(uint64, []byte) bool, framed, ropblock bool,
 	acceptDecodes func([]*Insn) bool) []search.Match {
 	if ropblock {
-		panic("ropblock not yet implemented")
+		return ropblockScan(a.self(), opcodes, baseVaddr, depth, dis, acceptCandidate, acceptDecodes)
 	}
 	self := a.self()
 	var isReturn func(*Insn) bool

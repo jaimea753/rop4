@@ -205,12 +205,34 @@ func (b *base) IsValidJOPGadget(decodes []*Insn, allowUndeterministic bool) bool
 	return true
 }
 
-// Scan: default Galileo backward walk (rop3 Architecture.scan default).
+// ropblockScan runs the abstract-gadget backward search wired with the
+// architecture's own ropblock predicates (ports rop3 Architecture._ropblock_scan).
+// Shared by every arch's Scan ropblock branch.
+func ropblockScan(a Arch, opcodes []byte, baseVaddr uint64, depth int, dis search.DisasmFunc,
+	acceptCandidate func(uint64, []byte) bool, acceptDecodes func([]*Insn) bool) []search.Match {
+	return search.BackwardsFramedSearch(opcodes, baseVaddr, depth, a.Alignment(), dis,
+		search.FramedPredicates{
+			IsTerminator:    a.IsPCRegWrite,
+			BranchReg:       a.RopblockBranchReg,
+			IsPrologue:      a.IsStackLoad,
+			Clobbers:        a.ClobbersReg,
+			IsFrame:         a.RestoresReturnAddress,
+			Splits:          a.SplitsGadget,
+			AcceptCandidate: acceptCandidate,
+			AcceptDecodes:   acceptDecodes,
+		})
+}
+
+// Scan: default Galileo backward walk (rop3 Architecture.scan default), or the
+// abstract-gadget backward search when ropblock is set.
 func (b *base) Scan(opcodes []byte, baseVaddr uint64, depth int, dis search.DisasmFunc,
 	isValidGadget func([]*Insn) bool, terminations []search.Termination,
 	acceptCandidate func(uint64, []byte) bool, framed, ropblock bool,
 	acceptDecodes func([]*Insn) bool) []search.Match {
-	// ropblock / framed handled by fixed-width overrides; base ignores them.
+	if ropblock {
+		return ropblockScan(b.outer, opcodes, baseVaddr, depth, dis, acceptCandidate, acceptDecodes)
+	}
+	// framed handled by fixed-width overrides; base ignores it.
 	return search.Galileo(opcodes, baseVaddr, terminations, depth, b.outer.Alignment(),
 		dis, search.Predicates{
 			IsValidGadget:         isValidGadget,

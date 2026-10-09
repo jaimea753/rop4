@@ -202,15 +202,14 @@ func (gf *GadFinder) scanFile(filename, base string, opt FindOpts) ([]*gadget.Ga
 		}
 	}
 
-	// Gather matches, serially or (x86 Galileo only) across worker goroutines.
+	// Gather matches. The abstract-gadget (ropblock) backward walk is not
+	// chunkable, so it stays serial; every other scan runs across worker
+	// goroutines (x86 Galileo chunked within sections, fixed-width ISAs split
+	// per section). rop4 does not force AArch64/RISC-V serial the way rop3 did.
 	var matches []search.Match
-	parallelizable := a.Parallelizable() && !gf.has(Ropblock)
-	if gf.Jobs > 1 && parallelizable {
-		matches = gf.parallelScan(bin, a, depth, terms, isValid, acceptCandidate)
+	if gf.Jobs > 1 && !gf.has(Ropblock) {
+		matches = gf.parallelScan(bin, a, depth, dis, terms, isValid, acceptCandidate)
 	} else {
-		if gf.Jobs > 1 {
-			debuglog.Info("%s scan runs single-threaded; --jobs ignored", a.ScanName(gf.has(Ropblock), gf.framed()))
-		}
 		var acceptDecodes func([]*disasm.Insn) bool
 		if gf.has(Ropblock) {
 			acceptDecodes = gf.makeRopblockBodyOK(a)

@@ -6,12 +6,20 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    # Ubuntu's libcapstone-dev (22.04 and 24.04) is still v4 and lacks the
+    # RISC-V arch, so the cgo preamble fails to compile. Debian trixie packages
+    # capstone 5.0.x with RISC-V, so run the job in that container and install
+    # it straight from apt.
+    container: debian:trixie
     env:
       CGO_ENABLED: "1"
     steps:
+      - name: Install capstone + toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libcapstone-dev pkg-config build-essential git ca-certificates
       - uses: actions/checkout@v4
-      - name: Install capstone + pkg-config
-        run: sudo apt-get update && sudo apt-get install -y libcapstone-dev pkg-config
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

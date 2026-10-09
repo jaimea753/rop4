@@ -72,6 +72,30 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/capstone-prefix"
           cmake --build capstone-src/build --target install -j"$(nproc)"
 
+          # capstone's CMake build does not emit a pkg-config file, and the cgo
+          # preamble uses `#cgo pkg-config: capstone`, so synthesize one from the
+          # paths that were actually installed (lib vs lib64 varies).
+          prefix="$PWD/capstone-prefix"
+          hdr="$(find "$prefix" -name capstone.h -path '*/capstone/*' | head -1)"
+          lib="$(find "$prefix" -name 'libcapstone.a' | head -1)"
+          test -n "$hdr" || { echo "capstone.h not installed"; find "$prefix"; exit 1; }
+          test -n "$lib" || { echo "libcapstone.a not installed"; find "$prefix"; exit 1; }
+          incdir="${hdr%/capstone/capstone.h}"
+          libdir="$(dirname "$lib")"
+          mkdir -p "$prefix/lib/pkgconfig"
+          cat > "$prefix/lib/pkgconfig/capstone.pc" <<EOF
+          Name: capstone
+          Description: Capstone disassembly engine
+          Version: ${CAPSTONE_VERSION}
+          Cflags: -I$incdir
+          Libs: -L$libdir -lcapstone
+          EOF
+          echo "--- capstone.pc ---"; cat "$prefix/lib/pkgconfig/capstone.pc"
+          # Hand the resolved paths to the build step.
+          echo "CAP_INCDIR=$incdir"   >> "$GITHUB_ENV"
+          echo "CAP_LIBDIR=$libdir"   >> "$GITHUB_ENV"
+          echo "CAP_PKGDIR=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
       - name: Build rop4 CLI and Python wrapper
         run: |
           set -eux
@@ -80,9 +104,13 @@ jobs:
           export GOARCH="${{ matrix.goarch }}"
           export CC="$PWD/wrap/cc"
           export CXX="$PWD/wrap/cxx"
-          # The cgo preamble uses `#cgo pkg-config: capstone`; point pkg-config at
-          # the freshly cross-built capstone and nowhere else.
-          export PKG_CONFIG_PATH="$PWD/capstone-prefix/lib/pkgconfig:$PWD/capstone-prefix/lib64/pkgconfig"
+          # Restrict pkg-config to the synthesized capstone.pc (ignore any host
+          # package), and also pass the include path directly to the compiler so
+          # the header is found even if pkg-config misbehaves.
+          export PKG_CONFIG_PATH="$CAP_PKGDIR"
+          export PKG_CONFIG_LIBDIR="$CAP_PKGDIR"
+          export CGO_CFLAGS="-I$CAP_INCDIR"
+          pkg-config --cflags --libs capstone
 
           bin="rop4-${{ matrix.name }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then bin="${bin}.exe"; fi
@@ -140,6 +168,8 @@ jobs:
           export CGO_ENABLED=1
           cap="$(brew --prefix capstone)"
           export PKG_CONFIG_PATH="$cap/lib/pkgconfig"
+          export CGO_CFLAGS="-I$cap/include"
+          pkg-config --cflags --libs capstone
           # Force the capstone static archive: with the dylib present the linker
           # would prefer it and the artifact would need Homebrew capstone at
           # runtime. Hiding the dylibs makes -lcapstone resolve to libcapstone.a.
